@@ -1,6 +1,6 @@
 # Debugger
 
-A simple docker image that provides the tools: **curl**, **dig**, **iptables**, **mysql**, **ncat**, **redis-cli**, **tcpdump**, **traceroute**, **wget**
+A simple docker image that provides the tools: **curl**, **dig**, **iptables**, **mysql**, **ncat**, **redis-cli**, **tcpdump**, **traceroute**, **wget**, **smtp-cli**
 
 ## Usage
 
@@ -8,8 +8,8 @@ A simple docker image that provides the tools: **curl**, **dig**, **iptables**, 
 
 ```bash
 $ docker run -it --rm gizzmoasus/debugger:1.2.0 nslookup kelcode.co.uk
-Server:         192.168.65.7
-Address:        192.168.65.7#53
+Server:         000.000.000.000
+Address:        000.000.000.000#53
 
 Non-authoritative answer:
 Name:   kelcode.co.uk
@@ -48,8 +48,8 @@ You can now use the tools as normal i.e.
 
 ```bash
 $ kubectl exec -it debugger -- nslookup kelcode.co.uk
-Server:         10.96.0.10
-Address:        10.96.0.10#53
+Server:         000.000.000.000
+Address:        000.000.000.000#53
 
 Non-authoritative answer:
 Name:   kelcode.co.uk
@@ -76,14 +76,20 @@ PONG
 ## Dockerfile
 
 ```dockerfile
-FROM alpine:3.19.0
+FROM alpine:3.20.3
 
-# Define redis details
-ARG REDIS_VERSION="7.2.4"
+# Define redis and smtp-cli details
+ARG REDIS_VERSION="7.4.1"
 ARG REDIS_URL="http://download.redis.io/releases/redis-${REDIS_VERSION}.tar.gz"
+ARG SMTP_CLI_VERSION="v3.10"
+ARG SMTP_CLI_URL="https://github.com/mludvig/smtp-cli/archive/refs/tags/${SMTP_CLI_VERSION}.tar.gz"
+ARG PERL_MODULES="IO::Socket::SSL Net::SSLeay IO::Socket::INET6 Socket6 Digest::HMAC Term::ReadKey MIME::Lite File::LibMagic Digest::HMAC_MD5 Net::DNS"
 
-# Install tools
-RUN apk add --update \
+# Create a non-root user with specific UID (1001)
+RUN addgroup -S appgroup && adduser -S -u 1001 -G appgroup appuser
+
+# Install build and runtime dependencies
+RUN apk add --no-cache \
     gcc \
     make \
     linux-headers \
@@ -91,14 +97,26 @@ RUN apk add --update \
     tar \
     openssl-dev \
     pkgconfig \
+    perl-dev \
+    file-dev \
+    zlib-dev \
     bind-tools \
     curl \
     mysql-client \
     nmap-ncat \
     iptables \
+    perl \
     tcpdump \
     traceroute \
-    wget
+    wget \
+    libmagic \
+    openssl
+
+# Install cpanminus for installing Perl modules
+RUN curl -L https://cpanmin.us | perl - App::cpanminus
+
+# Install Perl modules
+RUN cpanm --notest ${PERL_MODULES}
 
 # Install redis-cli
 RUN wget -O redis.tar.gz "${REDIS_URL}" \
@@ -108,18 +126,45 @@ RUN wget -O redis.tar.gz "${REDIS_URL}" \
   && make BUILD_TLS=yes MALLOC=libc redis-cli \
   && cp redis-cli /usr/local/bin/ \
   && chmod +x /usr/local/bin/redis-cli \
-  && rm -r /usr/src/redis
+  && rm -rf /usr/src/redis
+
+# Install smtp-cli
+RUN wget -O smtp-cli.tar.gz "${SMTP_CLI_URL}" \
+  && mkdir -p /usr/src/smtp-cli \
+  && tar -xzf smtp-cli.tar.gz -C /usr/src/smtp-cli --strip-components=1 \
+  && cd /usr/src/smtp-cli/ \
+  && cp smtp-cli /usr/local/bin/ \
+  && chmod +x /usr/local/bin/smtp-cli \
+  && rm -rf /usr/src/smtp-cli
+
+# Change ownership of binaries to the non-root user
+RUN chown appuser:appgroup /usr/local/bin/redis-cli /usr/local/bin/smtp-cli
 
 # Clean up
 RUN apk del \
     gcc \
-    linux-headers \
     make \
+    linux-headers \
     musl-dev \
     openssl-dev \
     pkgconfig \
-    tar \
-  && rm -rf /var/cache/apk/*
+    perl-dev \
+    file-dev \
+    zlib-dev \
+  && rm -rf /root/.cpanm /var/cache/apk/*
+
+# Switch to the non-root user
+USER 1001
+
 ```
 
-Total size: **94.09MiB**
+Total size: **106.89MiB**
+
+## Changelog
+
+2024-10-11:
+
+* Added smtp-cli (https://github.com/mludvig/smtp-cli)
+* Switched to a non-root image
+* Updated deps for alpine (3.20.3) and redis (7.4.1)
+
